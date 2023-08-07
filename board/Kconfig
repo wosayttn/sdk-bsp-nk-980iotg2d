@@ -63,12 +63,6 @@ menu "Hardware Drivers Config"
 
     menu "Board extended module drivers"
 
-        config BOARD_USING_MAX31875
-            bool "MAX31875 Temperature sensor(over i2c1)"
-            select NU_PKG_USING_MAX31875
-            select BSP_USING_I2C1
-            default n
-
         config BOARD_USING_LCD_ILI9341
             bool "LCD ILI9341 (over spi0)"
             select NU_PKG_USING_ILI9341
@@ -102,17 +96,6 @@ menu "Hardware Drivers Config"
                 default y
 
         endif
-
-        config BOARD_USING_ESP8266
-            bool "ESP8266 Wi-Fi module supporting(over uart1)"
-            select BSP_USING_UART
-            select BSP_USING_UART1
-            select BSP_USING_UART1_RX_DMA
-            select BSP_USING_UART1_TX_DMA
-            select PKG_USING_AT_DEVICE
-            select AT_DEVICE_USING_ESP8266
-            select AT_DEVICE_ESP8266_INIT_ASYN
-            default n
 
     endmenu
 

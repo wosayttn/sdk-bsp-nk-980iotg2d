@@ -176,7 +176,7 @@ You can use Tera Term terminate emulator (or other software) to type commands of
 
 ## 6. **Purchase**
 
-* [Nuvoton Direct][1]
+* [Where to buy][1]
 
 ## 7. **Resources**
 
@@ -184,7 +184,7 @@ You can use Tera Term terminate emulator (or other software) to type commands of
 * [Download TRM][3]
 * [Download NuWriter][4]
 
-  [1]: https://direct.nuvoton.com/tw/numaker-iiot-nuc980g2d
-  [2]: https://www.nuvoton.com/resource-download.jsp?tp_GUID=UG1020190308162722
+  [1]: https://www.nuvoton.com/products/iot-solution/iot-platform/numaker-iiot-nuc980g2/?tab=5
+  [2]: https://www.nuvoton.com/resource-download.jsp?tp_GUID=UG132023080203213148
   [3]: https://www.nuvoton.com/resource-download.jsp?tp_GUID=DA05-NUC980-1
   [4]: https://github.com/OpenNuvoton/NUC980_NuWriter

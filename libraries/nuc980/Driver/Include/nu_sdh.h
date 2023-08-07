@@ -11,14 +11,13 @@
 #define __NU_SDH_H__
 
 #ifdef __cplusplus
-    #define   __I     volatile             /*!< Defines 'read only' permissions                 */
-#else
-    #define   __I     volatile const       /*!< Defines 'read only' permissions                 */
+extern "C"
+{
 #endif
-#define     __O     volatile             /*!< Defines 'write only' permissions                */
-#define     __IO    volatile             /*!< Defines 'read / write' permissions              */
 
-#define TIMER0 0
+#define   __I     volatile const       /*!< Defines 'read only' permissions                 */
+#define   __O     volatile             /*!< Defines 'write only' permissions                */
+#define   __IO    volatile             /*!< Defines 'read / write' permissions              */
 
 /**
    @addtogroup REGISTER Control Register
@@ -589,6 +588,13 @@ typedef struct
 #define CardDetect_From_GPIO  (1ul << 8)   /*!< Card detection pin is GPIO \hideinitializer */
 #define CardDetect_From_DAT3  (1ul << 9)   /*!< Card detection pin is DAT3 \hideinitializer */
 
+/* SDH Define Error Code */
+#define SDH_TIMEOUT_CNT     2000000             /*!< SDH time-out counter \hideinitializer */
+#define SDH_OK              ( 0L)               /*!< SDH operation OK \hideinitializer */
+#define SDH_ERR_FAIL        (-1L)               /*!< SDH operation failed \hideinitializer */
+#define SDH_ERR_TIMEOUT     (-2L)               /*!< SDH operation abort due to timeout error \hideinitializer */
+
+
 /*@}*/ /* end of group SDH_EXPORTED_CONSTANTS */
 
 /** @addtogroup SDH_EXPORTED_TYPEDEF SDH Exported Type Defines
@@ -600,20 +606,21 @@ typedef struct SDH_info_t
     unsigned char   R3Flag;
     unsigned char   R7Flag;
     unsigned char volatile DataReadyFlag;
-    unsigned int    CardType;       /*!< SDHC, SD, or MMC */
-    unsigned int    RCA;            /*!< Relative card address */
-    unsigned int    totalSectorN;   /*!< Total sector number */
-    unsigned int    diskSize;       /*!< Disk size in K bytes */
-    int             sectorSize;     /*!< Sector size in bytes */
+    unsigned int    CardType;         /*!< SDHC, SD, or MMC */
+    unsigned int    RCA;              /*!< Relative card address */
+    unsigned int    totalSectorN;     /*!< Total sector number */
+    unsigned int    diskSize;         /*!< Disk size in K bytes */
+    int             sectorSize;       /*!< Sector size in bytes */
     unsigned char   *dmabuf;
+    int32_t         i32ErrCode;       /*!< SDH global error code */
 } SDH_INFO_T;                      /*!< Structure holds SD card info */
 
 /*@}*/ /* end of group SDH_EXPORTED_TYPEDEF */
 
-/// @cond HIDDEN_SYMBOLS
+/** @cond HIDDEN_SYMBOLS */
 extern SDH_INFO_T SD0, SD1;
-
-/// @endcond HIDDEN_SYMBOLS
+extern int32_t g_SDH_i32ErrCode;
+/** @endcond HIDDEN_SYMBOLS */
 
 /** @addtogroup SDH_EXPORTED_FUNCTIONS SDH Exported Functions
   @{
@@ -718,4 +725,8 @@ void SDH_Close_Disk(SDH_T *sdh);
 
 /*@}*/ /* end of group Standard_Driver */
 
-#endif  //end of __NU_SDH_H__
+#ifdef __cplusplus
+}
+#endif
+
+#endif  /*__NU_SDH_H__*/

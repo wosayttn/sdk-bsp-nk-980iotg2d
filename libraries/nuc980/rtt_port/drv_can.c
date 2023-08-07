@@ -68,6 +68,9 @@ struct nu_can
     E_SYS_IPRST rstidx;
     E_SYS_IPCLK clkidx;
     uint32_t int_flag;
+
+    uint32_t u32LastReportTime;
+    uint32_t u32LastSendPkg;
 };
 typedef struct nu_can *nu_can_t;
 
@@ -219,29 +222,69 @@ static void nu_can_ie(nu_can_t psNuCAN)
     }
 }
 
-static void nu_can_busoff_recovery(nu_can_t psNuCAN)
+static void nu_can_busoff_recovery(CAN_T *can)
 {
     uint32_t regCon, regTest;
 
-    regCon = psNuCAN->base->CON;
-    regTest = psNuCAN->base->TEST;
+    rt_tick_t bBegin;
+
+    regCon = can->CON;
+    regTest = can->TEST;
 
     /* To release busoff pin */
-    CAN_EnterInitMode(psNuCAN->base, regCon & ~(CAN_CON_IE_Msk | CAN_CON_SIE_Msk | CAN_CON_EIE_Msk));
+    CAN_EnterInitMode(can, regCon & ~(CAN_CON_IE_Msk | CAN_CON_SIE_Msk | CAN_CON_EIE_Msk));
 
     if (regCon & CAN_CON_TEST_Msk)
-        CAN_EnterTestMode(psNuCAN->base, regTest);
+        CAN_EnterTestMode(can, regTest);
 
-    CAN_LeaveInitMode(psNuCAN->base);
+    CAN_LeaveInitMode(can);
 
-    while ((CAN_GET_INT_STATUS(psNuCAN->base) & CAN_STATUS_LEC_Msk) == RT_CAN_BUS_EXPLICIT_BIT_ERR)
+#define DEF_BUSOFF_RECOVERY_TIMEOUT     2
+    bBegin = rt_tick_get();
+    while ((bBegin + DEF_BUSOFF_RECOVERY_TIMEOUT) > rt_tick_get())
     {
-        if (psNuCAN->base->ERR == 0)
+        if (can->ERR == 0)
         {
-            CAN_EnableInt(psNuCAN->base, regCon & (CAN_CON_IE_Msk | CAN_CON_SIE_Msk | CAN_CON_EIE_Msk));
+            CAN_EnableInt(can, regCon & (CAN_CON_IE_Msk | CAN_CON_SIE_Msk | CAN_CON_EIE_Msk));
             break;
         }
     }
+}
+
+rt_err_t nu_can_status_cb(struct rt_can_device *can, void *user_data)
+{
+#define DEF_TIMEOUT_COUNTER  3       // 10 * can->config.ticks
+    nu_can_t psNuCAN = (nu_can_t)can;
+    uint32_t u32Status = CAN_GET_INT_STATUS(psNuCAN->base);
+
+    /* Catch bus-off exception */
+    if (u32Status & CAN_STATUS_BOFF_Msk)
+    {
+        rt_kprintf("Catch busoff, recovery....\n");
+
+        /* Do bus-off recovery */
+        nu_can_busoff_recovery(psNuCAN->base);
+    }
+
+    /* Anti-zombie */
+    if ((psNuCAN->u32LastSendPkg == can->status.sndpkg) && (can->status.sndchange == 1))
+    {
+        psNuCAN->u32LastReportTime++;
+
+        if (psNuCAN->u32LastReportTime >= DEF_TIMEOUT_COUNTER)
+        {
+            rt_kprintf("Catch %s\n", szLEC[u32Status & CAN_STATUS_LEC_Msk]);
+
+            can->status.sndchange = 0;
+            psNuCAN->u32LastReportTime = 0;
+
+            rt_hw_can_isr(can, RT_CAN_EVENT_TX_FAIL);
+        }
+    }
+
+    psNuCAN->u32LastSendPkg = can->status.sndpkg;
+
+    return RT_EOK;
 }
 
 /* Interrupt Handle Function  ----------------------------------------------------*/
@@ -268,6 +311,7 @@ static void nu_can_isr(int vector, void *param)
 #ifndef RT_CAN_USING_HDR
             if (psNuCAN->int_flag & RT_DEVICE_FLAG_INT_TX)
             {
+                psNuCAN->dev.status.sndchange = 0;
                 /*Using as Lisen,Loopback,Loopback+Lisen mode*/
                 rt_hw_can_isr(&psNuCAN->dev, RT_CAN_EVENT_TX_DONE);
             }
@@ -280,7 +324,7 @@ static void nu_can_isr(int vector, void *param)
 #ifndef RT_CAN_USING_HDR
             if (psNuCAN->int_flag & RT_DEVICE_FLAG_INT_RX)
             {
-                /*Using as Lisen,Loopback,Loopback+Lisen mode*/
+                /*Using as Listen,Loopback,Loopback+Listen mode*/
                 rt_hw_can_isr(&psNuCAN->dev, RT_CAN_EVENT_RX_IND);
             }
 #endif
@@ -302,13 +346,11 @@ static void nu_can_isr(int vector, void *param)
                 psCANStatus->ackerrcnt++;
                 /* To avoid stuck in ISR by enabling Disable Auto-Retransmission(DAR). */
                 CAN_DISABLE_AUTO_RETRANSMISSION(base);
-                rt_hw_can_isr(&psNuCAN->dev, RT_CAN_EVENT_TX_FAIL);
                 break;
 
             case RT_CAN_BUS_IMPLICIT_BIT_ERR: //Bit1
             case RT_CAN_BUS_EXPLICIT_BIT_ERR: //Bit0
                 psCANStatus->biterrcnt++;
-                rt_hw_can_isr(&psNuCAN->dev, RT_CAN_EVENT_TX_FAIL);
                 break;
 
             /* For receiving exceptions */
@@ -340,18 +382,21 @@ static void nu_can_isr(int vector, void *param)
     /*IntId: 0x0001-0x0020, Number of Message Object which caused the interrupt.*/
     else if (u32IIDRstatus > 0 && u32IIDRstatus <= 32)
     {
+        u32IIDRstatus--; // Get index.
+
         if ((psNuCAN->int_flag & RT_DEVICE_FLAG_INT_TX) &&
-                (u32IIDRstatus <= RX_MSG_ID_INDEX))
+                (u32IIDRstatus < RX_MSG_ID_INDEX))
         {
             /*Message RAM 0~RX_MSG_ID_INDEX for CAN Tx using*/
-            rt_hw_can_isr(&psNuCAN->dev, RT_CAN_EVENT_TX_DONE | ((u32IIDRstatus - 1) << 8));
+            psNuCAN->dev.status.sndchange = 0;
+            rt_hw_can_isr(&psNuCAN->dev, RT_CAN_EVENT_TX_DONE | ((u32IIDRstatus) << 8));
         }
         else if (psNuCAN->int_flag & RT_DEVICE_FLAG_INT_RX)
         {
             /*Message RAM RX_MSG_ID_INDEX~31 for CAN Rx using*/
-            rt_hw_can_isr(&psNuCAN->dev, (RT_CAN_EVENT_RX_IND | ((u32IIDRstatus - 1) << 8)));
+            rt_hw_can_isr(&psNuCAN->dev, (RT_CAN_EVENT_RX_IND | ((u32IIDRstatus) << 8)));
         }
-        CAN_CLR_INT_PENDING_BIT(base, (u32IIDRstatus - 1));     /* Clear Interrupt Pending */
+        CAN_CLR_INT_PENDING_BIT(base, u32IIDRstatus);     /* Clear Interrupt Pending */
     }
 #endif
 }
@@ -399,6 +444,10 @@ static rt_err_t nu_can_configure(struct rt_can_device *can, struct can_configure
         goto exit_nu_can_configure;
     }
 
+    /* register status indication function */
+    can->status_indicate.ind = nu_can_status_cb;
+    can->status_indicate.args = RT_NULL;
+
     nu_can_ie(psNuCAN);
 
     return RT_EOK;
@@ -438,21 +487,36 @@ static rt_err_t nu_can_control(struct rt_can_device *can, int cmd, void *arg)
             /*set the filter message object*/
             if (filter_cfg->items[i].mode == 1)
             {
-                if (CAN_SetRxMsgObjAndMsk(psNuCAN->base, MSG(filter_cfg->items[i].hdr_bank + RX_MSG_ID_INDEX), filter_cfg->items[i].ide, filter_cfg->items[i].id, filter_cfg->items[i].mask, FALSE) == FALSE)
+
+                if (CAN_SetRxMsgObjAndMsk(psNuCAN->base,
+                                          MSG((filter_cfg->items[i].hdr_bank == -1) ? RX_MSG_ID_INDEX : RX_MSG_ID_INDEX + filter_cfg->items[i].hdr_bank),
+                                          filter_cfg->items[i].ide,
+                                          filter_cfg->items[i].id,
+                                          filter_cfg->items[i].mask,
+                                          FALSE) == FALSE)
                 {
                     return -(RT_ERROR);
                 }
+
             }
             else
             {
+
                 /*set the filter message object*/
-                if (CAN_SetRxMsgAndMsk(psNuCAN->base, MSG(filter_cfg->items[i].hdr_bank + RX_MSG_ID_INDEX), filter_cfg->items[i].ide, filter_cfg->items[i].id, filter_cfg->items[i].mask) == FALSE)
+                if (CAN_SetRxMsgAndMsk(psNuCAN->base,
+                                       MSG((filter_cfg->items[i].hdr_bank == -1) ? RX_MSG_ID_INDEX : RX_MSG_ID_INDEX + filter_cfg->items[i].hdr_bank),
+                                       filter_cfg->items[i].ide,
+                                       filter_cfg->items[i].id,
+                                       filter_cfg->items[i].mask) == FALSE)
                 {
                     return -(RT_ERROR);
                 }
-            }
-        }
-    }
+
+            } // if (filter_cfg->items[i].mode == 1)
+
+        } // for (int i = 0; i < filter_cfg->count; i++)
+
+    } // case RT_CAN_CMD_SET_FILTER:
     break;
 
     case RT_CAN_CMD_SET_MODE:
@@ -513,9 +577,11 @@ static rt_err_t nu_can_control(struct rt_can_device *can, int cmd, void *arg)
 
     case RT_CAN_CMD_GET_STATUS:
     {
-        rt_uint32_t errtype = psNuCAN->base->ERR;
-
+        rt_uint32_t errtype, status;
         RT_ASSERT(arg);
+
+        errtype = psNuCAN->base->ERR;
+        status = CAN_GET_INT_STATUS(psNuCAN->base);
 
         /*Receive Error Counter, return value is with Receive Error Passive.*/
         can->status.rcverrcnt = (errtype >> 8);
@@ -524,10 +590,13 @@ static rt_err_t nu_can_control(struct rt_can_device *can, int cmd, void *arg)
         can->status.snderrcnt = (errtype & 0xFF);
 
         /*Last Error Type*/
-        can->status.lasterrtype = CAN_GET_INT_STATUS(psNuCAN->base) & 0x8000;
+        can->status.lasterrtype = status & CAN_STATUS_LEC_Msk;
 
         /*Status error code*/
-        can->status.errcode = CAN_GET_INT_STATUS(psNuCAN->base) & 0x07;
+        can->status.errcode = (status & CAN_STATUS_BOFF_Msk) ? 4 :   // 4~7
+                              (status & CAN_STATUS_EWARN_Msk) ? 1 :  // 1
+                              (status & CAN_STATUS_EPASS_Msk) ? 2 :  // 2~3
+                              0;                                     // 0
 
         rt_memcpy(arg, &can->status, sizeof(struct rt_can_status));
     }
@@ -543,7 +612,7 @@ static rt_err_t nu_can_control(struct rt_can_device *can, int cmd, void *arg)
 
 static int nu_can_sendmsg(struct rt_can_device *can, const void *buf, rt_uint32_t boxno)
 {
-    STR_CANMSG_T tMsg;
+    STR_CANMSG_T tMsg = {0};
     struct rt_can_msg *pmsg;
     nu_can_t psNuCAN = (nu_can_t)can;
 
@@ -594,20 +663,9 @@ static int nu_can_sendmsg(struct rt_can_device *can, const void *buf, rt_uint32_
         goto exit_nu_can_sendmsg;
     }
 
-    if (pmsg->len)
+    if (pmsg->len > 0)
     {
         rt_memcpy(&tMsg.Data[0], &pmsg->data[0], pmsg->len);
-    }
-    else
-    {
-        goto exit_nu_can_sendmsg;
-    }
-
-    /* Catch bus-off exception */
-    if (CAN_GET_INT_STATUS(psNuCAN->base) & CAN_STATUS_BOFF_Msk)
-    {
-        /* Do bus-off recovery */
-        nu_can_busoff_recovery(psNuCAN);
     }
 
     /* Configure Msg RAM and send the Msg in the RAM. */
@@ -628,7 +686,7 @@ exit_nu_can_sendmsg:
 
 static int nu_can_recvmsg(struct rt_can_device *can, void *buf, rt_uint32_t boxno)
 {
-    STR_CANMSG_T tMsg;
+    STR_CANMSG_T tMsg = {0};
     struct rt_can_msg *pmsg;
     nu_can_t psNuCAN = (nu_can_t)can;
 
@@ -655,7 +713,7 @@ static int nu_can_recvmsg(struct rt_can_device *can, void *buf, rt_uint32_t boxn
     pmsg->id  = tMsg.Id;
     pmsg->len = tMsg.DLC ;
 
-    if (pmsg->len)
+    if (pmsg->len > 0)
         rt_memcpy(&pmsg->data[0], &tMsg.Data[0], pmsg->len);
 
     return RT_EOK;

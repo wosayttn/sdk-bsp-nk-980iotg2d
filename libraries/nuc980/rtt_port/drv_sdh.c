@@ -20,6 +20,14 @@
 #include <drv_pdma.h>
 #include <drv_sys.h>
 
+#define LOG_TAG    "drv.sdh"
+#define DBG_ENABLE
+#define DBG_SECTION_NAME   LOG_TAG
+#define DBG_LEVEL      LOG_LVL_DBG
+#define DBG_COLOR
+#include <rtdbg.h>
+
+
 #include <dfs_fs.h>
 #include <dfs_file.h>
 #include <unistd.h>
@@ -59,6 +67,15 @@
     #define NU_SDH_MEMCPY  nu_pdma_memcpy
 #else
     #define NU_SDH_MEMCPY  memcpy
+#endif
+
+//#define NU_SDH_CARD_DETECTION         CardDetect_From_DAT3
+#define NU_SDH_CARD_DETECTION         CardDetect_From_GPIO
+
+#if (NU_SDH_CARD_DETECTION == CardDetect_From_DAT3)
+    #warning "You enabled card detection source from DAT3 mode."
+    #warning "Please remove pull-up resistor of DAT3 pin and add a pull-down 100Kohm resistor on DAT3 pin."
+    #warning "Please also check your SD card is with an internal pull-up circuit on DAT3 pin."
 #endif
 
 enum
@@ -101,7 +118,7 @@ struct nu_sdh
     E_SYS_IPRST           rstidx;
     E_SYS_IPCLK           clkidx;
 
-    uint32_t              is_card_inserted;
+    int                   IsCardMounted;
     SDH_INFO_T           *info;
     struct rt_semaphore   lock;
     uint8_t              *pbuf;
@@ -167,7 +184,7 @@ static void SDH_IRQHandler(int vector, void *param)
 {
     nu_sdh_t sdh = (nu_sdh_t)param;
     SDH_T *sdh_base = sdh->base;
-    unsigned int volatile isr;
+    unsigned int volatile isr, ier;
     SDH_INFO_T *pSD = sdh->info;
 
     // FMI data abort interrupt
@@ -179,6 +196,8 @@ static void SDH_IRQHandler(int vector, void *param)
 
     //----- SD interrupt status
     isr = sdh_base->INTSTS;
+    ier = sdh_base->INTEN;
+
     if (isr & SDH_INTSTS_BLKDIF_Msk)
     {
         // block down
@@ -186,7 +205,8 @@ static void SDH_IRQHandler(int vector, void *param)
         SDH_CLR_INT_FLAG(sdh_base, SDH_INTSTS_BLKDIF_Msk);
     }
 
-    if (isr & SDH_INTSTS_CDIF_Msk)   // card detect
+    if ((ier & SDH_INTEN_CDIEN_Msk) &&
+            (isr & SDH_INTSTS_CDIF_Msk))    // card detect
     {
 #if defined(NU_SDH_HOTPLUG)
         if (sdh->base == SDH0)
@@ -396,6 +416,11 @@ static int rt_hw_sdh_init(void)
     ret = rt_event_init(&sdh_event, "sdh_event", RT_IPC_FLAG_FIFO);
     RT_ASSERT(ret == RT_EOK);
 
+#if defined(BSP_USING_SDH0)
+    /* We need also enable FMI clock if we need SD0. */
+    nu_sys_ipclk_enable(FMICKEN);
+#endif
+
     for (i = (SDH_START + 1); i < SDH_CNT; i++)
     {
         /* Register sdcard device */
@@ -542,23 +567,60 @@ exit_nu_sdh_hotplug_unmount:
 static void nu_card_detector(nu_sdh_t sdh)
 {
     SDH_T *sdh_base = sdh->base;
-    unsigned int volatile isr = sdh_base->INTSTS;
+    unsigned int volatile isr;
+
+    rt_err_t result = rt_sem_take(&sdh->lock, RT_WAITING_FOREVER);
+    RT_ASSERT(result == RT_EOK);
+
+#if (NU_SDH_CARD_DETECTION == CardDetect_From_DAT3)
+    SDH_CardDetection(sdh_base);
+#endif
+
+    isr = sdh_base->INTSTS;
+
+#if (NU_SDH_CARD_DETECTION == CardDetect_From_GPIO)
     if (isr & SDH_INTSTS_CDSTS_Msk)
+#else
+    if (!(isr & SDH_INTSTS_CDSTS_Msk))
+#endif
     {
         /* Card removed */
-        sdh->info->IsCardInsert = FALSE;   // SDISR_CD_Card = 1 means card remove for GPIO mode
+        sdh->info->IsCardInsert = FALSE;
         rt_memset((void *)sdh->info, 0, sizeof(SDH_INFO_T));
-        nu_sdh_hotplug_unmount(sdh);
+        if (sdh->IsCardMounted)
+        {
+            result = rt_sem_release(&sdh->lock);
+            RT_ASSERT(result == RT_EOK);
+
+            nu_sdh_hotplug_unmount(sdh);
+            sdh->IsCardMounted = 0;
+            return;
+        }
     }
     else
     {
-        SDH_Open(sdh_base, CardDetect_From_GPIO);
-        if (!SDH_Probe(sdh_base))
+        if (!sdh->IsCardMounted)
         {
-            /* Card inserted */
-            nu_sdh_hotplug_mount(sdh);
-        }
+            SDH_Open(sdh_base, NU_SDH_CARD_DETECTION);
+            if (!SDH_Probe(sdh_base))
+            {
+                /* Card inserted */
+                sdh->info->IsCardInsert = TRUE;
+                result = rt_sem_release(&sdh->lock);
+                RT_ASSERT(result == RT_EOK);
+
+                sdh->IsCardMounted = (nu_sdh_hotplug_mount(sdh) == RT_EOK) ? 1 : 0 ;
+
+                return;
+            }
+
+        } //if (!sdh->IsCardMounted)
     }
+
+    result = rt_sem_release(&sdh->lock);
+    RT_ASSERT(result == RT_EOK);
+
+    return;
 }
 
 static void sdh_hotplugger(void *param)
@@ -568,8 +630,9 @@ static void sdh_hotplugger(void *param)
 
     for (i = (SDH_START + 1); i < SDH_CNT; i++)
     {
+        nu_sdh_arr[i].IsCardMounted = 0;
         /* Try to detect SD card on selected port. */
-        SDH_Open(nu_sdh_arr[i].base, CardDetect_From_GPIO);
+        SDH_Open(nu_sdh_arr[i].base, NU_SDH_CARD_DETECTION);
         if (!SDH_Probe(nu_sdh_arr[i].base) &&
                 SDH_IS_CARD_PRESENT(nu_sdh_arr[i].base))
         {
@@ -581,7 +644,14 @@ static void sdh_hotplugger(void *param)
     {
         if (rt_event_recv(&sdh_event, (NU_SDH_CARD_EVENT_ALL),
                           RT_EVENT_FLAG_OR | RT_EVENT_FLAG_CLEAR,
-                          RT_WAITING_FOREVER, &e) == RT_EOK)
+#if (NU_SDH_CARD_DETECTION == CardDetect_From_GPIO)
+                          RT_WAITING_FOREVER,
+#elif (NU_SDH_CARD_DETECTION == CardDetect_From_DAT3)
+                          1000,
+#else
+#error "Please specify NU_SDH_CARD_DETECTION definition."
+#endif
+                          &e) == RT_EOK)
         {
             /* Debounce */
             rt_thread_mdelay(500);
@@ -603,6 +673,15 @@ static void sdh_hotplugger(void *param)
             } //switch(e)
 
         } //if
+#if (NU_SDH_CARD_DETECTION == CardDetect_From_DAT3)
+        else
+        {
+            for (i = (SDH_START + 1); i < SDH_CNT; i++)
+            {
+                nu_card_detector(&nu_sdh_arr[i]);
+            }
+        }
+#endif
 
     } /* while(1) */
 }
