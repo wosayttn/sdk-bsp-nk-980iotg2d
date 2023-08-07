@@ -1,6 +1,6 @@
 board:
-  buy_url_cn: https://direct.nuvoton.com/en/numaker-iiot-nuc980g2d
-  buy_url_global: https://direct.nuvoton.com/en/numaker-iiot-nuc980g2d
+  buy_url_cn: https://www.nuvoton.com/products/iot-solution/iot-platform/numaker-iiot-nuc980g2/?tab=5
+  buy_url_global: https://www.nuvoton.com/products/iot-solution/iot-platform/numaker-iiot-nuc980g2/?tab=5
   debug_interface: JTAG
   debugger: J-LINK
   description_en: Nuvoton Technology provides industrial IoT development platform using NUC980DK71YC microprocessor,
@@ -12,8 +12,8 @@ board:
   emulator_machine: ''
   large_image: documents/images/large.png
   name: NK-980IOTG2D
-  price_cn: 355 CNY
-  price_global: 55 USD
+  price_cn: 
+  price_global: 
   sale_contact_cn: https://www.nuvoton.com
   sale_contact_global: https://www.nuvoton.com
   small_image: documents/images/small.png
