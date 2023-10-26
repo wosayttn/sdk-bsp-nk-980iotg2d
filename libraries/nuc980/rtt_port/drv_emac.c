@@ -661,7 +661,7 @@ static int rt_hw_nu_emac_init(void)
     return 0;
 }
 
-INIT_APP_EXPORT(rt_hw_nu_emac_init);
+INIT_DEVICE_EXPORT(rt_hw_nu_emac_init);
 
 
 #if 0

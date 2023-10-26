@@ -247,9 +247,6 @@
 #define UTEST_THR_STACK_SIZE 4096
 #define UTEST_THR_PRIORITY 20
 
-/* RT-Thread Utestcases */
-
-
 /* RT-Thread online packages */
 
 /* IoT - internet of things */
@@ -261,6 +258,9 @@
 
 
 /* Wiced WiFi */
+
+
+/* CYW43012 WiFi */
 
 
 /* IoT Cloud */
@@ -287,7 +287,7 @@
 #define PKG_LVGL_DISP_REFR_PERIOD 33
 #define PKG_LVGL_USING_DEMOS
 #define PKG_LVGL_USING_V08035
-#define PKG_LVGL_VER_NUM 0x08035
+#define PKG_LVGL_VER_NUM 0x080305
 
 /* u8g2: a monochrome graphic library */
 
@@ -321,6 +321,7 @@
 
 /* Kendryte SDK */
 
+#define BSP_USING_I2C1 ""
 
 /* AI packages */
 
@@ -471,7 +472,5 @@
 #define NU_PKG_USING_ADC_TOUCH
 #define NU_PKG_USING_ADC_TOUCH_HW
 #define NU_PKG_USING_SPINAND
-#define UTEST_CMD_PREFIX "bsp.nuvoton.utest."
-#define BOARD_USE_UTEST
 
 #endif

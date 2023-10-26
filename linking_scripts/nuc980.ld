@@ -4,18 +4,19 @@ ENTRY(system_vectors)
 
 MEMORY
 {
-    RAM  (rwx)   : ORIGIN = 0x000000, LENGTH = 0x08000000
+    RAM  (rwx)   : ORIGIN = 0x00000000, LENGTH = 0x08000000-0x00200000
+    NON_CACHEABLE (rwx) : ORIGIN = 0x08000000-0x00200000, LENGTH = 0x00200000
 }
 
 SECTIONS
 {
-    . = ALIGN(4);   
-    .text : 
+    . = ALIGN(4);
+    .text :
     {
         *(.vectors)
         *(.text)
         *(.gnu.linkonce.t*)
-        
+
         /* section information for finsh shell */
         . = ALIGN(4);
         __fsymtab_start = .;
@@ -27,7 +28,7 @@ SECTIONS
         __vsymtab_start = .;
         KEEP(*(VSymTab))
         __vsymtab_end = .;
-        . = ALIGN(4);   
+        . = ALIGN(4);
 
         /* section information for modules */
         . = ALIGN(4);
@@ -49,6 +50,12 @@ SECTIONS
         KEEP(*(UtestTcTab))
         __rt_utest_tc_tab_end = .;
         . = ALIGN(4);
+
+        /* section information for cherryusb usb host class */
+        . = ALIGN(4);
+        __usbh_class_info_start__ = .;
+        KEEP(*(.usbh_class_info))
+        __usbh_class_info_end__ = .;
     }
 
     . = ALIGN(4);
@@ -81,7 +88,7 @@ SECTIONS
 
     . = ALIGN(4);
     .nobss : { *(.nobss) }
-    
+
     . = ALIGN(4);
     __bss_start__ = .;
     __bss_start = .;
@@ -90,6 +97,15 @@ SECTIONS
     __bss_end = .;
     __bss_end__ = .;
     . = ALIGN(4);
+
+    .no_cache_ram_region (NOLOAD):
+    {
+        . = ALIGN(4);
+        *(.noncacheable)
+        *(.usbhostlib.*)
+        . = ALIGN(4);
+    } > NON_CACHEABLE
+
 
     /* stabs debugging sections. */
     .stab 0 : { *(.stab) }

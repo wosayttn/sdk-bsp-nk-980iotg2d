@@ -17,13 +17,23 @@
 #include "drv_sys.h"
 
 #if defined(BSP_USING_MMU)
+
 static struct mem_desc hw_mem_desc[] =
 {
-    { 0x00000000, 0xFFFFFFFF,     0x00000000, RW_NCNB },     /* None cached for 4G memory */
-    { 0x00000000, BOARD_SDRAM_SIZE - 1,   0x00000000, RW_CB   }, /* 64M cached DDR memory */
-    { BIT31, (BIT31 | BOARD_SDRAM_SIZE) - 1,   BIT31, RW_NCNB }, /* Shadow DDR Map */
-    { 0x3C000000, 0x3C004000 - 1,   0x3C000000, RW_NCNB },     /* 16K SRAM memory */
-    { 0xBC000000, 0xBC004000 - 1,   0xBC000000, RW_NCNB }      /* 16K Shadow memory */
+    {
+        /* BOARD_SDRAM_SIZE cached DDR memory */
+        0x00000000,
+        BOARD_SDRAM_SIZE - BOARD_SDRAM_NCNB_SIZE - 1,
+        0x00000000,
+        RW_CB
+    },
+    {
+        /* Non-cacheable memory */
+        BOARD_SDRAM_SIZE - BOARD_SDRAM_NCNB_SIZE,
+        0xFFFFFFFF - (BOARD_SDRAM_SIZE - BOARD_SDRAM_NCNB_SIZE) + 1,
+        BOARD_SDRAM_SIZE - BOARD_SDRAM_NCNB_SIZE,
+        RW_NCNB
+    },
 };
 #endif
 
