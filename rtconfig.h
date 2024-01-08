@@ -106,7 +106,6 @@
 #define RT_SERIAL_USING_DMA
 #define RT_SERIAL_RB_BUFSZ 2048
 #define RT_USING_CAN
-#define RT_CAN_USING_HDR
 #define RT_USING_HWTIMER
 #define RT_USING_CPUTIME
 #define RT_USING_I2C
@@ -225,7 +224,7 @@
 #define RT_LWIP_TCPTHREAD_MBOX_SIZE 256
 #define RT_LWIP_TCPTHREAD_STACKSIZE 4096
 #define LWIP_NO_TX_THREAD
-#define RT_LWIP_ETHTHREAD_PRIORITY 8
+#define RT_LWIP_ETHTHREAD_PRIORITY 12
 #define RT_LWIP_ETHTHREAD_STACKSIZE 4096
 #define RT_LWIP_ETHTHREAD_MBOX_SIZE 256
 #define RT_LWIP_REASSEMBLY_FRAG
@@ -246,6 +245,9 @@
 #define RT_USING_UTEST
 #define UTEST_THR_STACK_SIZE 4096
 #define UTEST_THR_PRIORITY 20
+
+/* RT-Thread Utestcases */
+
 
 /* RT-Thread online packages */
 
@@ -321,7 +323,6 @@
 
 /* Kendryte SDK */
 
-#define BSP_USING_I2C1 ""
 
 /* AI packages */
 
@@ -472,5 +473,7 @@
 #define NU_PKG_USING_ADC_TOUCH
 #define NU_PKG_USING_ADC_TOUCH_HW
 #define NU_PKG_USING_SPINAND
+#define UTEST_CMD_PREFIX "bsp.nuvoton.utest."
+#define BOARD_USE_UTEST
 
 #endif

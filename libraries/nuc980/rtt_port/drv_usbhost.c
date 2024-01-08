@@ -202,7 +202,7 @@ static EP_INFO_T *GetFreePipe(
 
         if (i < NU_MAX_USBH_PIPE)
         {
-            EP_INFO_T *psEPInfo = (EP_INFO_T *)rt_malloc_align(sizeof(EP_INFO_T), 32);
+            EP_INFO_T *psEPInfo = (EP_INFO_T *)rt_malloc_align(sizeof(EP_INFO_T), CACHE_LINE_SIZE);
             if (psEPInfo != RT_NULL)
             {
 #if defined(BSP_USING_MMU)

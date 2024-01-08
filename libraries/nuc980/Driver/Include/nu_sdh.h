@@ -718,7 +718,6 @@ uint32_t SDH_CardDetection(SDH_T *sdh);
 void SDH_Open_Disk(SDH_T *sdh, uint32_t u32CardDetSrc);
 void SDH_Close_Disk(SDH_T *sdh);
 
-
 /*@}*/ /* end of group SDH_EXPORTED_FUNCTIONS */
 
 /*@}*/ /* end of group SDH_Driver */

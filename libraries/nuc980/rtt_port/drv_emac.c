@@ -24,7 +24,11 @@
 #include "lwipopts.h"
 
 #include "drv_sys.h"
-//#include "drv_pdma.h"
+#include "drv_emac.h"
+
+#if (RT_LWIP_TCPTHREAD_PRIORITY >= RT_LWIP_ETHTHREAD_PRIORITY)
+    #error "Please re-configure the TCPTHREAD and ETHTHREAD priority."
+#endif
 
 /* Private define ---------------------------------------------------------------*/
 // RT_DEV_NAME_PREFIX e
@@ -41,18 +45,6 @@
 #define NU_EMAC_TID_STACK_SIZE  1024
 
 /* Private typedef --------------------------------------------------------------*/
-enum
-{
-    EMAC_START = -1,
-#if defined(BSP_USING_EMAC0)
-    EMAC0_IDX,
-#endif
-#if defined(BSP_USING_EMAC1)
-    EMAC1_IDX,
-#endif
-    EMAC_CNT
-};
-
 struct nu_emac_lwip_pbuf
 {
     struct pbuf_custom p;  // lwip pbuf
@@ -73,7 +65,7 @@ struct nu_emac
     E_SYS_IPRST         rstidx;
     E_SYS_IPCLK         clkidx;
     rt_thread_t         link_monitor;
-    rt_uint8_t          mac_addr[6];
+    rt_uint8_t          mac_addr[8];
     struct rt_semaphore eth_sem;
     const struct memp_desc *memp_rx_pool;
 };
@@ -90,12 +82,11 @@ static void nu_emac_halt(nu_emac_t);
 static void nu_emac_reinit(nu_emac_t);
 static void link_monitor(void *param);
 static rt_err_t nu_emac_init(rt_device_t dev);
-
+static rt_err_t nu_emac_control(rt_device_t dev, int cmd, void *args);
 static rt_err_t nu_emac_open(rt_device_t dev, rt_uint16_t oflag);
 static rt_err_t nu_emac_close(rt_device_t dev);
 static rt_size_t nu_emac_read(rt_device_t dev, rt_off_t pos, void *buffer, rt_size_t size);
 static rt_size_t nu_emac_write(rt_device_t dev, rt_off_t pos, const void *buffer, rt_size_t size);
-static rt_err_t nu_emac_control(rt_device_t dev, int cmd, void *args);
 static rt_err_t nu_emac_tx(rt_device_t dev, struct pbuf *p);
 static struct pbuf *nu_emac_rx(rt_device_t dev);
 static void rt_hw_nu_emac_assign_macaddr(nu_emac_t psNuEMAC);
@@ -125,6 +116,7 @@ static struct nu_emac nu_emac_arr[] =
         .irqn_rx         =  IRQ_EMC0_RX,
         .rstidx          =  EMAC0RST,
         .clkidx          =  EMAC0CKEN,
+        .mac_addr        = {0x82, 0x06, 0x21, 0x94, 0x53, 0x01},
         .memp_rx_pool    =  &memp_emac0_rx
     },
 #endif
@@ -136,6 +128,7 @@ static struct nu_emac nu_emac_arr[] =
         .irqn_rx        =  IRQ_EMC1_RX,
         .rstidx         =  EMAC1RST,
         .clkidx         =  EMAC1CKEN,
+        .mac_addr        = {0x82, 0x06, 0x21, 0x94, 0x53, 0x02},
         .memp_rx_pool   =  &memp_emac1_rx
     },
 #endif
@@ -313,6 +306,8 @@ static void nu_memmgr_init(EMAC_MEMMGR_T *psMemMgr)
 
     psMemMgr->psRXFrames = (EMAC_FRAME_T *) rt_malloc_align(sizeof(EMAC_FRAME_T) * psMemMgr->u32RxDescSize, 32);
     RT_ASSERT(psMemMgr->psRXFrames != RT_NULL);
+
+    NU_EMAC_TRACE("[%s] TxDesc num: %d, RxDesc num: %d\n", __func__, EMAC_TX_DESC_SIZE, EMAC_RX_DESC_SIZE);
 }
 
 static rt_err_t nu_emac_init(rt_device_t dev)
@@ -392,11 +387,38 @@ static rt_err_t nu_emac_control(rt_device_t dev, int cmd, void *args)
     case NIOCTL_GADDR:
         /* Get MAC address */
         if (args)
-            rt_memcpy(args, &psNuEMAC->mac_addr[0], 6);
+            rt_memcpy(args, &psNuEMAC->mac_addr[0], NETIF_MAX_HWADDR_LEN);
         else
             return -RT_ERROR;
 
         break;
+
+    case NIOCTL_PRIV_CHANGE_MAC:
+    {
+        uint8_t *pu8MacAddr = (uint8_t *)args;
+        if (pu8MacAddr)
+        {
+            EMAC_T *EMAC = psNuEMAC->memmgr.psEmac;
+            rt_memcpy(&psNuEMAC->mac_addr[0], pu8MacAddr, NETIF_MAX_HWADDR_LEN);
+            EMAC_SetMacAddr(EMAC, psNuEMAC->mac_addr);
+            if (psNuEMAC->eth.netif)
+            {
+                struct netif *netif = psNuEMAC->eth.netif;
+                rt_memcpy(&netif->hwaddr[0], &psNuEMAC->mac_addr[0], NETIF_MAX_HWADDR_LEN);
+            }
+        }
+
+        NU_EMAC_TRACE("[%s] New MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n", \
+                      psNuEMAC->name, \
+                      psNuEMAC->mac_addr[0], \
+                      psNuEMAC->mac_addr[1], \
+                      psNuEMAC->mac_addr[2], \
+                      psNuEMAC->mac_addr[3], \
+                      psNuEMAC->mac_addr[4], \
+                      psNuEMAC->mac_addr[5]);
+    }
+    break;
+
     default :
         break;
     }
@@ -457,10 +479,10 @@ void nu_emac_pbuf_free(struct pbuf *p)
 {
     nu_emac_lwip_pbuf_t my_buf = (nu_emac_lwip_pbuf_t)p;
 
+    // NU_EMAC_TRACE("%08x %08x\n", my_buf, my_buf->rx_desc);
+
     SYS_ARCH_DECL_PROTECT(old_level);
     SYS_ARCH_PROTECT(old_level);
-
-    //rt_kprintf("%08x %08x\n",my_buf, my_buf->rx_desc);
 
     /* Update RX descriptor & trigger */
     EMAC_RxTrigger(my_buf->psMemMgr, my_buf->rx_desc);
@@ -474,11 +496,11 @@ static struct pbuf *nu_emac_rx(rt_device_t dev)
     nu_emac_t psNuEmac = (nu_emac_t)dev;
     struct pbuf *p = RT_NULL;
     uint8_t *pu8DataBuf = NULL;
-    unsigned int avaialbe_size;
+    unsigned int available_size;
     EMAC_T *EMAC = psNuEmac->memmgr.psEmac;
 
     /* Check available data. */
-    if ((avaialbe_size = EMAC_GetAvailRXBufSize(&psNuEmac->memmgr, &pu8DataBuf)) > 0)
+    if ((available_size = EMAC_GetAvailRXBufSize(&psNuEmac->memmgr, &pu8DataBuf)) > 0)
     {
         EMAC_DESCRIPTOR_T *cur_rx = EMAC_RecvPktDoneWoRxTrigger(&psNuEmac->memmgr);
         nu_emac_lwip_pbuf_t my_pbuf  = (nu_emac_lwip_pbuf_t)memp_malloc_pool(psNuEmac->memp_rx_pool);
@@ -492,40 +514,33 @@ static struct pbuf *nu_emac_rx(rt_device_t dev)
             my_pbuf->memp_rx_pool           = psNuEmac->memp_rx_pool;
 
 #if defined(BSP_USING_MMU)
-            mmu_invalidate_dcache((rt_uint32_t)pu8DataBuf, (rt_uint32_t)avaialbe_size);
+            mmu_invalidate_dcache((rt_uint32_t)pu8DataBuf, (rt_uint32_t)available_size);
 #endif
-            //rt_kprintf("%08x, %08x, %d\n", my_pbuf, cur_rx, avaialbe_size);
+            //NU_EMAC_TRACE("%08x, %08x, %d\n", my_pbuf, cur_rx, available_size);
             p = pbuf_alloced_custom(PBUF_RAW,
-                                    avaialbe_size,
+                                    available_size,
                                     PBUF_REF,
                                     &my_pbuf->p,
                                     pu8DataBuf,
                                     EMAC_MAX_PKT_SIZE);
             if (p == RT_NULL)
             {
-                rt_kprintf("%s : failed to alloted %08x\n", __func__, p);
+                NU_EMAC_TRACE("%s : failed to alloted %08x\n", __func__, p);
                 EMAC_RxTrigger(&psNuEmac->memmgr, cur_rx);
             }
         }
         else
         {
-            rt_kprintf("LWIP_MEMPOOL_ALLOC < 0!!\n");
+            NU_EMAC_TRACE("LWIP_MEMPOOL_ALLOC < 0!!\n");
             EMAC_RxTrigger(&psNuEmac->memmgr, cur_rx);
         }
     }
     else    /* If it hasn't RX packet, it will enable interrupt. */
     {
-        /* No available RX packet, we enable RXGD/RDUIEN interrupts. */
-        if (!(EMAC->INTEN & EMAC_INTEN_RDUIEN_Msk))
-        {
-            EMAC_CLEAR_INT_FLAG(EMAC, (EMAC_INTSTS_RDUIF_Msk | EMAC_INTSTS_RXGDIF_Msk));
-            EMAC_ENABLE_INT(EMAC, (EMAC_INTEN_RDUIEN_Msk | EMAC_INTEN_RXGDIEN_Msk));
-        }
-        else
-        {
-            EMAC_CLEAR_INT_FLAG(EMAC, EMAC_INTSTS_RXGDIF_Msk);
-            EMAC_ENABLE_INT(EMAC, EMAC_INTEN_RXGDIEN_Msk);
-        }
+        EMAC_ENABLE_INT(EMAC, (EMAC_INTEN_RDUIEN_Msk | EMAC_INTEN_RXGDIEN_Msk));
+
+        /* Trigger EMAC for receiving. */
+        EMAC_TRIGGER_RX(EMAC);
     }
 
     return p;
@@ -541,13 +556,16 @@ static void nu_emac_rx_isr(int vector, void *param)
     /* No RX descriptor available, we need to get data from RX pool */
     if (EMAC_GET_INT_FLAG(EMAC, EMAC_INTSTS_RDUIF_Msk))
     {
+        NU_EMAC_TRACE("No RX descriptor available, INTEN=%08x, INTSTS=%08x\n", EMAC->INTEN, EMAC->INTSTS);
         EMAC_DISABLE_INT(EMAC, (EMAC_INTEN_RDUIEN_Msk | EMAC_INTEN_RXGDIEN_Msk));
+        EMAC_CLEAR_INT_FLAG(EMAC, (EMAC_INTSTS_RDUIF_Msk | EMAC_INTSTS_RXGDIF_Msk));
         eth_device_ready(&psNuEmac->eth);
     }
     /* A good packet ready. */
     else if (EMAC_GET_INT_FLAG(EMAC, EMAC_INTSTS_RXGDIF_Msk))
     {
         EMAC_DISABLE_INT(EMAC, EMAC_INTEN_RXGDIEN_Msk);
+        EMAC_CLEAR_INT_FLAG(EMAC, EMAC_INTSTS_RXGDIF_Msk);
         eth_device_ready(&psNuEmac->eth);
     }
 
@@ -590,28 +608,6 @@ static void nu_emac_tx_isr(int vector, void *param)
     EMAC->INTSTS = status;
 }
 
-static void rt_hw_nu_emac_assign_macaddr(nu_emac_t psNuEMAC)
-{
-    static rt_uint32_t value = 0x94539453;
-
-    /* Assign MAC address */
-    psNuEMAC->mac_addr[0] = 0x82;
-    psNuEMAC->mac_addr[1] = 0x06;
-    psNuEMAC->mac_addr[2] = 0x21;
-    psNuEMAC->mac_addr[3] = (value >> 16) & 0xff;
-    psNuEMAC->mac_addr[4] = (value >> 8) & 0xff;
-    psNuEMAC->mac_addr[5] = (value) & 0xff;
-
-    NU_EMAC_TRACE("MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n", \
-                  psNuEMAC->mac_addr[0], \
-                  psNuEMAC->mac_addr[1], \
-                  psNuEMAC->mac_addr[2], \
-                  psNuEMAC->mac_addr[3], \
-                  psNuEMAC->mac_addr[4], \
-                  psNuEMAC->mac_addr[5]);
-    value++;
-}
-
 static int rt_hw_nu_emac_init(void)
 {
     int i;
@@ -628,8 +624,6 @@ static int rt_hw_nu_emac_init(void)
         nu_sys_ipclk_enable(psNuEMAC->clkidx);
 
         nu_sys_ip_reset(psNuEMAC->rstidx);
-
-        rt_hw_nu_emac_assign_macaddr(psNuEMAC);
 
         /* Register member functions */
         psNuEMAC->eth.parent.init       = nu_emac_init;
@@ -661,10 +655,15 @@ static int rt_hw_nu_emac_init(void)
     return 0;
 }
 
-INIT_DEVICE_EXPORT(rt_hw_nu_emac_init);
+INIT_APP_EXPORT(rt_hw_nu_emac_init);
 
+int nu_emac_assign_mac_addr(EMAC_IDX evIdx, uint8_t *pu8MacAddr)
+{
+    rt_memcpy(nu_emac_arr[evIdx].mac_addr, pu8MacAddr, NETIF_MAX_HWADDR_LEN);
+    return 0;
+}
 
-#if 0
+#if 1
 /*
     Remeber src += lwipiperf_SRCS in components\net\lwip\lwip-*\SConscript
 */
@@ -679,8 +678,8 @@ lwiperf_report(void *arg, enum lwiperf_report_type report_type,
     LWIP_UNUSED_ARG(local_addr);
     LWIP_UNUSED_ARG(local_port);
 
-    rt_kprintf("IPERF report: type=%d, remote: %s:%d, total bytes: %"U32_F", duration in ms: %"U32_F", kbits/s: %"U32_F"\n",
-               (int)report_type, ipaddr_ntoa(remote_addr), (int)remote_port, bytes_transferred, ms_duration, bandwidth_kbitpsec);
+    NU_EMAC_TRACE("IPERF report: type=%d, remote: %s:%d, total bytes: %"U32_F", duration in ms: %"U32_F", kbits/s: %"U32_F"\n",
+                  (int)report_type, ipaddr_ntoa(remote_addr), (int)remote_port, bytes_transferred, ms_duration, bandwidth_kbitpsec);
 }
 
 int lwiperf_example_init(void)
