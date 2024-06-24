@@ -663,7 +663,7 @@ int nu_emac_assign_mac_addr(EMAC_IDX evIdx, uint8_t *pu8MacAddr)
     return 0;
 }
 
-#if 1
+#if 0
 /*
     Remeber src += lwipiperf_SRCS in components\net\lwip\lwip-*\SConscript
 */

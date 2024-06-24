@@ -246,9 +246,6 @@
 #define UTEST_THR_STACK_SIZE 4096
 #define UTEST_THR_PRIORITY 20
 
-/* RT-Thread Utestcases */
-
-
 /* RT-Thread online packages */
 
 /* IoT - internet of things */
@@ -473,7 +470,5 @@
 #define NU_PKG_USING_ADC_TOUCH
 #define NU_PKG_USING_ADC_TOUCH_HW
 #define NU_PKG_USING_SPINAND
-#define UTEST_CMD_PREFIX "bsp.nuvoton.utest."
-#define BOARD_USE_UTEST
 
 #endif

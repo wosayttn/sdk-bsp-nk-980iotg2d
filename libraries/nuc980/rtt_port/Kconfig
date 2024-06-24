@@ -1,4 +1,7 @@
-config SOC_SERIES_NUC980
+config SOC_FAMILY_NUMICRO
+    bool
+
+    config SOC_SERIES_NUC980
     bool
     select ARCH_ARM_ARM9
     select SOC_FAMILY_NUMICRO
